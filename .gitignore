@@ -1,0 +1,12 @@
+.DS_store
+__pycache__/
+*.log
+*.ipynb
+.*.swp
+
+# Do not push all PDBbind dataset
+data/
+
+# pdb or molecule files used for testing/debugging, not usefull for pdbbind 
+pdb/ 
+BBBP.csv
