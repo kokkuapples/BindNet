@@ -157,6 +157,7 @@ class FeatureExtractor:
         # Calcola le cariche di Gasteiger per la molecola
         Chem.AllChem.ComputeGasteigerCharges(self.molecule)
         conf = self.molecule.GetConformer()
+        
         for atom in self.molecule.GetAtoms():
             # Ottieni le coordinate dell'atomo
             pos = conf.GetAtomPosition(atom.GetIdx())
@@ -173,9 +174,9 @@ class FeatureExtractor:
                 self.encode_num(atomic_number),
                 [int(hybridization),
                  heavy_degree,
-                 hetero_degree,
-                 partial_charge,
-                ]
+                 hetero_degree]
+                 #partial_charge, # Problems...
+                #]
             ])
             # atom_features = [
             #     atomic_number,
@@ -189,6 +190,7 @@ class FeatureExtractor:
             #     ptable.GetAtomicWeight(atomic_number),
             # ]
             features.append(atom_features)
+        
         features = np.array(features, dtype=np.float32) 
         coords = np.array(coords, dtype=np.float32)
 
@@ -196,12 +198,16 @@ class FeatureExtractor:
             features = np.hstack((features, 
                             molcode*np.ones((features.shape[0], 1), dtype=np.float32)))
         features = np.hstack((features, self.get_from_smarts()))
+        
         if self.node_num is not None: # TODO: no idea why this is here
-            assert len(features) == self.node_num, "This should be already handled."
+            
+            if len(features) != self.node_num: return None, None
+            #assert len(features) == self.node_num, "This should be already handled."
             features = features[:self.node_num]
             coords = coords[:self.node_num]
 
         self.coords = coords
+        
         if np.isnan(features).any():
             raise RuntimeError('Got NaN when calculating features')
         return coords, features
@@ -484,10 +490,6 @@ def ExtractPocketAndLigand(mol, cutoff=12.0, expandResidues=True,
     return protein, pocket, ligand
 
 
-
-
-
-
 def dist_filter(dist_matrix, theta): 
     pos = np.where(dist_matrix<=theta)
     ligand_list, pocket_list = pos
@@ -499,6 +501,7 @@ def GetTypePair(pocket_fe, ligand_fe):
     pocks, ligs = dist_filter(dm, 12)
     
     bonds = np.concatenate([pocket_fe.atom_nums[pocks].reshape(-1, 1), ligand_fe.atom_nums[ligs].reshape(-1, 1)], axis=1)
+    print(pair_ids)
     type_pair = [len(np.where((bonds == k).all(axis=1))[0]) for k in pair_ids]
     return type_pair
         
@@ -548,11 +551,13 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, t
     pocket_coords, pocket_features = pocket_fe.ExtractAtomFeatures() 
     ligand_coords, ligand_features = ligand_fe.ExtractAtomFeatures()
 
+    if pocket_features is None or ligand_features is None:
+        return None
+
     # pocket_atom_nums = np.array([atom.GetAtomicNum() for atom in pocket.GetAtoms()])
     # ligand_atom_nums = np.array([atom.GetAtomicNum() for atom in ligand.GetAtoms()])
 
     type_pair = GetTypePair(pocket_fe, ligand_fe)
-
 
     # protein_bond_features = ExtractBondFeatures(protein)
     pocket_edges, pocket_bond_features = pocket_fe.ExtractBondFeatures()
@@ -578,12 +583,13 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, t
     coords = np.vstack([ligand_coords, pocket_coords])
     assert node_features.shape[0]==coords.shape[0]
     
-    return {'separator': ligand_features.shape[0], 'coords': coords, 'node_features': node_features, 
-            'edge_features': edge_features, 'atoms_raw': atoms_raw, 'type_pair': type_pair}
+    return node_features, pocket_edges, ligand_edges, edge_features
+    #return {'separator': ligand_features.shape[0], 'coords': coords, 'node_features': node_features, 
+    #        'edge_features': edge_features, 'atoms_raw': atoms_raw, 'type_pair': type_pair}
 
 
 def process_pdbbind(data_dir:Path, dropHs:bool=True, test_k:str=None, year=2016):
-    pk_dict = load_pk_data(data_dir/f'index/INDEX_general_PL_data.{year}')
+    pk_dict = load_pk_data(data_dir/f'index/INDEX_general_PL_data.2020')
     if test_k is not None:
         keys_list = [test_k]
         train_keys = keys_list
@@ -608,7 +614,10 @@ def process_pdbbind(data_dir:Path, dropHs:bool=True, test_k:str=None, year=2016)
             ligand_fe = FeatureExtractor.fromFile(data_dir/k/f"{k}_ligand.mol2", dropHs=dropHs)
             if pocket_fe is None or ligand_fe is None:
                 continue
-            g.append(process_key(pocket_fe, ligand_fe))
+
+            result = process_key(pocket_fe, ligand_fe)
+            if result:
+                g.append(result)
 
     train_y = [pk_dict[k] for k in train_keys]
     val_y = [pk_dict[k] for k in val_keys]
@@ -695,7 +704,7 @@ def create_molecules(atom_symbols, coordinates, separator):
     return protein.GetMol(), ligand.GetMol()
 
 
-def process_misato(data_dir:Path, dropHs:bool=True, year=2016):
+def process_misato(data_dir:Path, dropHs:bool=True, year=2020):
     pk_dict = load_pk_data(data_dir/f'index/INDEX_general_PL_data.{year}')
 
     data_raw = h5py.File(data_dir, 'r')
@@ -727,11 +736,11 @@ def process_misato(data_dir:Path, dropHs:bool=True, year=2016):
 
 if __name__ == "__main__":
     dataset = 'pdbbind'
-    raw_data_path = Path('data/PDBbind_v20/refined-set')
+    raw_data_path = Path('data/PDBbind2020/refined-set')
 
     # dataset = 'misato'
     # raw_data_raw = Path('data/MD') / 'h5_files' / 'tiny_md.hdf5' # misato dataset
-    year = '20' + raw_data_path.parent.name.split('_v')[-1]
+    year = '20' + raw_data_path.parent.name.split('_v')[-1] # TODO: Check this!!!!!!
 
     if dataset == 'pdbbind':
         train, val, test = process_pdbbind(raw_data_path, year=year)
