@@ -501,7 +501,6 @@ def GetTypePair(pocket_fe, ligand_fe):
     pocks, ligs = dist_filter(dm, 12)
     
     bonds = np.concatenate([pocket_fe.atom_nums[pocks].reshape(-1, 1), ligand_fe.atom_nums[ligs].reshape(-1, 1)], axis=1)
-    print(pair_ids)
     type_pair = [len(np.where((bonds == k).all(axis=1))[0]) for k in pair_ids]
     return type_pair
         
@@ -583,7 +582,7 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, t
     coords = np.vstack([ligand_coords, pocket_coords])
     assert node_features.shape[0]==coords.shape[0]
     
-    return node_features, pocket_edges, ligand_edges, edge_features
+    return node_features, ligand_features.shape[0], pocket_edges, ligand_edges, lig_pock_edge, edge_features
     #return {'separator': ligand_features.shape[0], 'coords': coords, 'node_features': node_features, 
     #        'edge_features': edge_features, 'atoms_raw': atoms_raw, 'type_pair': type_pair}
 
