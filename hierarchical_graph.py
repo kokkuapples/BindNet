@@ -273,8 +273,6 @@ def __convert_to_tensor(edges):
 def __process_pair(pocket_fe, ligand_fe):
     # Atom pocket-ligand graph processing
     # TODO: Check for bidirectional edges LP
-    # TODO: Solve num_nodes problem, node_num viene sovrascritto da qualche parte, definito correttamente
-    # TODO: Adjust format of edge features for atom level, check for offset in pl_edges
     atom_xs, offset_atom, atom_edges_index_p, atom_edges_index_l, atom_pl_edges, atom_edge_features = process_key(pocket_fe, ligand_fe)
     
     # Convert (node, node) list into (2, N) tensors and then cat in one single tensor

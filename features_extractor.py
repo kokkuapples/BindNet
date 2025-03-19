@@ -522,14 +522,15 @@ def load_pk_data(data_path):
             res[code] = float(pk)
     return res
 
-
 def edge_ligand_pocket(dist_matrix, lig_size, theta=4, keep_pock=False, reset_idx=True):
     pos = np.where(dist_matrix<=theta)
     ligand_list, pocket_list = pos
+    
     if keep_pock:
         node_list = range(dist_matrix.shape[1])
     else:
         node_list = sorted(list(set(pocket_list)))
+    
     node_map = {node_list[i]:i+lig_size for i in range(len(node_list))}
     
     dist_list = dist_matrix[pos]
@@ -543,7 +544,7 @@ def edge_ligand_pocket(dist_matrix, lig_size, theta=4, keep_pock=False, reset_id
     return dist_list, edge_list, node_map
 
 
-def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, theta=5.0):
+def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=True, theta=5.0):
     # Estrai la proteina intera, la tasca e il ligando
     # protein, pocket, ligand = ExtractPocketAndLigand(mol, cutoff=12.0, expandResidues=True)
 
@@ -568,11 +569,10 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, t
     ligand_edges, ligand_bond_features = ligand_fe.ExtractBondFeatures()
 
     dm = cdist(ligand_coords, pocket_coords)
+    
     lig_pock_dist, lig_pock_edge, node_map = edge_ligand_pocket(dm, ligand_features.shape[0], theta=theta, keep_pock=keep_pock)
     pocket_coords = pocket_coords[sorted(node_map.keys())]
-    print("before", pocket_features.shape)
     pocket_features = pocket_features[sorted(node_map.keys())]
-    print("after", pocket_features.shape)
     pockets_atoms = pocket_fe.atom_nums[sorted(node_map.keys())]
     # TODO: also pocket_edges would need to be updated accordingly
     
