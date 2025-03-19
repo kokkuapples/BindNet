@@ -15,6 +15,7 @@ import re
 
 from features_extractor import FeatureExtractor, process_key, dist_filter
 
+
 class HierarchicalProteinGraph(Data):
     def __inc__(self, key, value, *args, **kwargs):
         if key == "g2a_index":
@@ -32,11 +33,11 @@ class HierarchicalProteinGraph(Data):
 
 class HierarchicalProteinExtractor(FeatureExtractor):
     def __init__(self, molecule, pdb_file, dropHs:bool=True, cut_dist=5.0, node_num=None):
-        super().__init__(molecule, dropHs, cut_dist, node_num)
+        super().__init__(molecule, pdb_file, dropHs, cut_dist, node_num)
         self.pdb_file = pdb_file
 
-        self.__subgroup_encoding = self.__read_encoding("subgroups_encoding.csv")
-        self.__aa_encoding = self.__read_encoding("aminoacids_encoding.csv")
+        self.subgroup_encoding = self.__read_encoding("subgroups_encoding.csv")
+        self.aa_encoding = self.__read_encoding("aminoacids_encoding.csv")
 
     def build_subgroup_graph(self):
         # Match subgroups to protein and get a2g and g2a representation
@@ -45,7 +46,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         self.__get_a2g_repr()
 
         # Get tensor of tokenized subgroups
-        subgroups_xs = torch.tensor([self.__subgroup_encoding[subgroup] for subgroup in subgroup_smiles])
+        subgroups_xs = torch.tensor([self.subgroup_encoding[subgroup] for subgroup in subgroup_smiles])
         
         # Get subgroup -> subgroup edges
         coords = [self.__compute_center_of_mass(ids) for ids in self.__g2a_repr.values()]
@@ -79,7 +80,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         aa_list = list(set(mapping.values()))
         aa_list.sort(key=lambda t: t[1])
         
-        aa_xs = torch.tensor([self.__aa_encoding[val[0]] for val in aa_list])
+        aa_xs = torch.tensor([self.aa_encoding[val[0]] for val in aa_list])
 
         return aa_xs
 
@@ -131,7 +132,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         matches = []
 
         Chem.Kekulize(self.molecule, clearAromaticFlags=True)
-        for subgroup_smiles in self.__subgroup_encoding.keys(): # Already in SMILES
+        for subgroup_smiles in self.subgroup_encoding.keys(): # Already in SMILES
             frag_for_match = Chem.MolFromSmiles(re.sub(r"=", r"~", subgroup_smiles))
             
             matched_atoms = self.molecule.GetSubstructMatches(frag_for_match)
@@ -216,7 +217,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         com_coords = np.average(coords, axis=0, weights=weights)
         return com_coords
 
-    def __distance_based_matching(self, repr_, edge_threshold) :
+    def __distance_based_matching(self, repr_, edge_threshold):
         center_of_masses = np.array([self.__compute_center_of_mass(atoms) for atoms in repr_.values()]) 
         
         index1 = []
@@ -233,15 +234,14 @@ class HierarchicalProteinExtractor(FeatureExtractor):
     def __topological_based_matching(self, repr_):
         substructures = repr_.keys()
         edges = set()
+        
         for i, substruct1 in enumerate(substructures):
             for j, substruct2 in enumerate(substructures):
                 if i != j:
-                    # TODO: Find neighbors using atom-node edges (distance based)
-                    neighbors = [list(self.molecule.GetAtomWithIdx(atom).GetNeighbors()) for atom in repr_[substruct1]]
+                    neighbors = [self.a2a_distance_repr[atom] for atom in repr_[substruct1]]
                    
-                    # Flat the list and get atom idx
-                    neightbors = sum(neighbors, [])
-                    neighbors_index = set([a.GetIdx() for a in neightbors])
+                    # Flat the list
+                    neighbors_index = set(sum(neighbors, []))
 
                     substructure_to_atom = repr_[substruct2]
                     if neighbors_index.intersection(substructure_to_atom):
@@ -254,9 +254,9 @@ class HierarchicalProteinExtractor(FeatureExtractor):
 
         return edges_tensor
 
-def __get_ligand_pocket_bonds(pocket_coord, ligand_coord, offset):
+def __get_ligand_pocket_bonds(pocket_coord, ligand_coord, offset, threshold=4):
     dm = cdist(pocket_coord, ligand_coord)
-    pocket_idx, ligand_idx = dist_filter(dm, 12)
+    pocket_idx, ligand_idx = dist_filter(dm, threshold)
     
     ligand_idx += offset
     pocket_ligand_edges = np.vstack([np.hstack([pocket_idx, ligand_idx]), 
@@ -273,6 +273,8 @@ def __convert_to_tensor(edges):
 def __process_pair(pocket_fe, ligand_fe):
     # Atom pocket-ligand graph processing
     # TODO: Check for bidirectional edges LP
+    # TODO: Solve num_nodes problem, node_num viene sovrascritto da qualche parte, definito correttamente
+    # TODO: Adjust format of edge features for atom level, check for offset in pl_edges
     atom_xs, offset_atom, atom_edges_index_p, atom_edges_index_l, atom_pl_edges, atom_edge_features = process_key(pocket_fe, ligand_fe)
     
     # Convert (node, node) list into (2, N) tensors and then cat in one single tensor
@@ -281,6 +283,12 @@ def __process_pair(pocket_fe, ligand_fe):
     atom_edges_index_p = __convert_to_tensor(atom_edges_index_p)
     atom_pl_edges = __convert_to_tensor(atom_pl_edges)
     atom_edges_index = torch.cat([atom_edges_index_p, atom_edges_index_l, atom_pl_edges], dim=1)
+    
+    # Add edge type feature and zero padding for PL edges
+    num_edge_features = atom_edges_index_l.shape[1] + atom_edges_index_p.shape[1]
+    zero_padding = torch.zeros(atom_pl_edges.shape[1], atom_edge_features.shape[1])
+    atom_edge_features = torch.vstack([torch.hstack([torch.from_numpy(atom_edge_features), torch.ones(num_edge_features).reshape(-1, 1)]),
+                                       torch.hstack([zero_padding, torch.ones(atom_pl_edges.shape[1]).reshape(-1, 1) * -1])])
 
     ### Subgroup pocket-ligand graph processing
     subgroup_xs_p, subgroup_edges_index_p, subgroup_atom_edges_index_p, subgroup_coord_p = pocket_fe.build_subgroup_graph()
@@ -306,11 +314,11 @@ def __process_pair(pocket_fe, ligand_fe):
     aa_xs_p, aa_edges_index_p, aa_subgroup_edges_index_p, aa_coord_p = pocket_fe.build_aminoacid_graph()
 
     # In AA level the ligand is a single node
-    aa_xs_l = torch.tensor([99])
+    # TODO: Weighted sum over AA ligand node
+    aa_xs_l = torch.tensor([ligand_fe.aa_encoding["LIGAND"]])
     aa_edges_index_l = torch.tensor([])
-    aa_subgroup_edges_index_l = __convert_to_tensor([(99, a) for a in subgroup_xs_l])
+    aa_subgroup_edges_index_l = __convert_to_tensor([(0, node) for node in range(len(subgroup_xs_l))])
     aa_coord_l = np.expand_dims(np.mean(subgroup_coord_l, axis=0), axis=0)
-    #aa_xs_l, aa_edges_index_l, aa_subgroup_edges_index_l, aa_cord_l = ligand_fe.build_aminoacid_graph()
 
     offset_aa = aa_edges_index_p.shape[0]
     aa_edges_index_l += offset_aa
@@ -341,7 +349,7 @@ def process_pdbbind(set_type, year="2016"):
     assert os.path.isdir(base_data_dir), f"{base_data_dir} is not a valid path"
 
     index_name = f"INDEX_refined_data.{year}" if set_type == "refined-set" else f"INDEX_general_PL_data.{year}"
-    index_file = os.path.join(base_data_dir, "index", f"INDEX_refined_data.{year}")
+    index_file = os.path.join(base_data_dir, "index", index_name)
 
     # Read from index file labels and dirnames
     with open(index_file, "r") as f: 
@@ -349,7 +357,7 @@ def process_pdbbind(set_type, year="2016"):
 
     pdb_names = [line[0] for line in index_lines] 
     labels = torch.Tensor([float(line[3]) for line in index_lines])
-    pdb_names = pdb_names[:1]
+    pdb_names = pdb_names[:15] # for debug 
     print(f"Processing {len(pdb_names)} proteins...")
     processed_data = []
     for label, pdb_filename in tqdm.tqdm(zip(labels, pdb_names)):
@@ -371,6 +379,7 @@ def process_pdbbind(set_type, year="2016"):
         
         processed_data.append(data)
         print(data)
+        print(" ")
     
     # Check if processed dir exists otherwise create it
     save_path_dir = os.path.join(os.getcwd(), "data", f"PDBbind{year}", f"{set_type}_processed")
@@ -383,4 +392,3 @@ def process_pdbbind(set_type, year="2016"):
 
 if __name__ == "__main__":
     process_pdbbind("refined-set", year="2016")
-

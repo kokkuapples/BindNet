@@ -11,6 +11,7 @@ from tqdm import tqdm
 import scipy.spatial as ss
 from scipy.spatial.distance import cdist
 import pickle
+from collections import defaultdict
 import h5py
 # log all the anomalies
 import logging
@@ -52,7 +53,6 @@ margin1, margin2, margin3 = 10, 5, 3
 bond_dict = {1: Chem.rdchem.BondType.SINGLE, 2: Chem.rdchem.BondType.DOUBLE, 3: Chem.rdchem.BondType.TRIPLE}
 
 
-
 class FeatureExtractor:
     def __init__(self, molecule, pdb_file, dropHs:bool=True, cut_dist=5.0, node_num=None):
         """
@@ -63,6 +63,7 @@ class FeatureExtractor:
         self.dropHs = dropHs
         self.cut_dist = cut_dist
         self.node_num = node_num
+        
         if self.node_num is not None: # TODO: no idea why this is here
             molecule = Chem.RWMol(self.molecule)
             # reverse the molecule to only keep the first node_num atoms
@@ -97,7 +98,6 @@ class FeatureExtractor:
             'donor':       '[!$([#6,H0,-,-2,-3]),$([!H0;#7,#8,#9])]',
             'ring':        '[r]'
             }
-
     def encode_num(self, atomic_num:int):
         """Encode atom type with a binary vector. If atom type is not included in
         the `atom_classes`, its encoding is an all-zeros vector.
@@ -301,9 +301,18 @@ class FeatureExtractor:
         edge_index = np.array(edges).T
         edge_dist = np.linalg.norm(self.coords[edge_index[0]] - self.coords[edge_index[1]], axis=1).reshape(-1, 1)
         bond_features = np.hstack([bond_features, edge_dist])
+        
+        self.get_a2a_distance_repr(edges)
+
         assert np.isnan(bond_features).sum() == 0
         return edges, bond_features
-    
+   
+    def get_a2a_distance_repr(self, edges):
+        # TODO: check for bidirectional edges
+        self.a2a_distance_repr = defaultdict(list)
+        for e1, e2 in edges:
+            self.a2a_distance_repr[e1].append(e2)
+
     @classmethod
     def fromFile(cls, mol_file, dropHs:bool=True, tried_formats=None):
         """
@@ -362,8 +371,8 @@ class FeatureExtractor:
                 print(f"[{mol_file.parent.name}] Could not parse {suffix.upper()} file.")
                 logging.error(f"[{mol_file.parent.name}] Could not parse {suffix.upper()} file.")
                 return None
-        
-        return cls(mol, pdb_file, dropHs=dropHs, node_num=node_num)
+       
+        return cls(mol, pdb_file, dropHs=dropHs, cut_dist=5.0, node_num=node_num)
 
     
     def SaveMolecule(self, filename, file_format='pdb'):
@@ -378,10 +387,6 @@ class FeatureExtractor:
             print(f"File saved in {output_path}")
         else:
             raise ValueError("Invalid file format. Choose 'sdf' or 'pdb'.")
-    
-    
-    
-
 
 
 def GetAtomResidueId(atom):
@@ -549,7 +554,7 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, t
     # esempio calcolo delle features
     pocket_coords, pocket_features = pocket_fe.ExtractAtomFeatures() 
     ligand_coords, ligand_features = ligand_fe.ExtractAtomFeatures()
-
+    
     if pocket_features is None or ligand_features is None:
         return None
 
@@ -565,10 +570,12 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=False, t
     dm = cdist(ligand_coords, pocket_coords)
     lig_pock_dist, lig_pock_edge, node_map = edge_ligand_pocket(dm, ligand_features.shape[0], theta=theta, keep_pock=keep_pock)
     pocket_coords = pocket_coords[sorted(node_map.keys())]
+    print("before", pocket_features.shape)
     pocket_features = pocket_features[sorted(node_map.keys())]
+    print("after", pocket_features.shape)
     pockets_atoms = pocket_fe.atom_nums[sorted(node_map.keys())]
     # TODO: also pocket_edges would need to be updated accordingly
-
+    
     if identity_features:
         node_features = np.vstack([
             np.hstack([ligand_features, np.zeros(ligand_features.shape)]),
