@@ -355,7 +355,7 @@ def process_pdbbind(set_type, year="2016"):
 
     pdb_names = [line[0] for line in index_lines] 
     labels = torch.Tensor([float(line[3]) for line in index_lines])
-    pdb_names = pdb_names[:15] # for debug 
+    
     print(f"Processing {len(pdb_names)} proteins...")
     processed_data = []
     for label, pdb_filename in tqdm.tqdm(zip(labels, pdb_names)):
