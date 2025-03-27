@@ -54,7 +54,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         # Get subgroup -> atom edges
         subgroup_atom_edges_index = self.__get_subgroup_atom_edges()
 
-        return subgroups_xs, subgroup_edges_index, subgroup_atom_edges_index, coords
+        return subgroups_xs, subgroup_edges_index, subgroup_atom_edges_index, torch.Tensor(coords)
 
     def build_aminoacid_graph(self):
         # The AA graph needs information from subgroup level, if the latter is not created then create it
@@ -74,7 +74,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         # Get AA -> subgrup edges
         aa_subgroup_edges_index = self.__get_AA_subgroup_edges()
         
-        return aa_xs, aa_edges_index, aa_subgroup_edges_index, coords
+        return aa_xs, aa_edges_index, aa_subgroup_edges_index, torch.Tensor(coords)
 
     def __get_AA_tokens(self, mapping):
         aa_list = list(set(mapping.values()))
@@ -270,11 +270,20 @@ def __convert_to_tensor(edges):
 
     return torch.tensor([node1, node2])
 
+def __concat_features(l_xs, p_xs, l_coord, p_coord):
+    concat_p_xs = torch.cat([torch.Tensor(p_coord), p_xs.reshape(-1, 1)], dim=1) 
+    concat_l_xs = torch.cat([torch.Tensor(l_coord), l_xs.reshape(-1, 1)], dim=1) 
+
+    return torch.cat([concat_p_xs, concat_l_xs])
+    
 def __process_pair(pocket_fe, ligand_fe):
     # Atom pocket-ligand graph processing
     # TODO: Check for bidirectional edges LP
-    atom_xs, offset_atom, atom_edges_index_p, atom_edges_index_l, atom_pl_edges, atom_edge_features = process_key(pocket_fe, ligand_fe)
-    
+    atom_xs, offset_atom, atom_edges_index_p, atom_edges_index_l, atom_pl_edges, atom_edge_features, coords = process_key(pocket_fe, ligand_fe)
+  
+    # Concat coords to atom features
+    atom_xs = torch.cat([torch.Tensor(coords), torch.Tensor(atom_xs)], dim=1)
+
     # Convert (node, node) list into (2, N) tensors and then cat in one single tensor
     # Adding offset
     atom_edges_index_l = __convert_to_tensor(atom_edges_index_l) + offset_atom
@@ -299,7 +308,7 @@ def __process_pair(pocket_fe, ligand_fe):
     subgroup_atom_edges_index_l[0,] += offset_subgroup
     subgroup_atom_edges_index_l[1,] += offset_atom
     
-    subgroup_xs = torch.cat([subgroup_xs_p, subgroup_xs_l])
+    subgroup_xs = __concat_features(subgroup_xs_p, subgroup_xs_l, subgroup_coord_p, subgroup_coord_l) 
     subgroup_atom_edges_index = torch.cat([subgroup_atom_edges_index_p, subgroup_atom_edges_index_l], dim=1)
     
     subgroup_pl_edges = __get_ligand_pocket_bonds(subgroup_coord_p, subgroup_coord_l, offset_subgroup)
@@ -316,7 +325,7 @@ def __process_pair(pocket_fe, ligand_fe):
     aa_xs_l = torch.tensor([ligand_fe.aa_encoding["LIGAND"]])
     aa_edges_index_l = torch.tensor([])
     aa_subgroup_edges_index_l = __convert_to_tensor([(0, node) for node in range(len(subgroup_xs_l))])
-    aa_coord_l = np.expand_dims(np.mean(subgroup_coord_l, axis=0), axis=0)
+    aa_coord_l = np.expand_dims(torch.mean(subgroup_coord_l, axis=0), axis=0)
 
     offset_aa = aa_edges_index_p.shape[0]
     aa_edges_index_l += offset_aa
@@ -324,7 +333,7 @@ def __process_pair(pocket_fe, ligand_fe):
     aa_subgroup_edges_index_l[0,] += offset_aa
     aa_subgroup_edges_index_l[1,] += offset_subgroup
 
-    aa_xs = torch.cat([aa_xs_p, aa_xs_l])
+    aa_xs = __concat_features(aa_xs_p, aa_xs_l, aa_coord_p, aa_coord_l) 
     aa_subgroup_edges_index = torch.cat([aa_subgroup_edges_index_p, aa_subgroup_edges_index_l], dim=1)
     
     aa_pl_edges = __get_ligand_pocket_bonds(aa_coord_p, aa_coord_l, offset_aa)
@@ -355,7 +364,7 @@ def process_pdbbind(set_type, year="2016"):
 
     pdb_names = [line[0] for line in index_lines] 
     labels = torch.Tensor([float(line[3]) for line in index_lines])
-    
+    pdb_names = pdb_names[:15] 
     print(f"Processing {len(pdb_names)} proteins...")
     processed_data = []
     for label, pdb_filename in tqdm.tqdm(zip(labels, pdb_names)):
@@ -377,7 +386,6 @@ def process_pdbbind(set_type, year="2016"):
         
         processed_data.append(data)
         print(data)
-        print(" ")
     
     # Check if processed dir exists otherwise create it
     save_path_dir = os.path.join(os.getcwd(), "data", f"PDBbind{year}", f"{set_type}_processed")
@@ -389,4 +397,5 @@ def process_pdbbind(set_type, year="2016"):
     
 
 if __name__ == "__main__":
+    # TODO: Fix filtered_id order
     process_pdbbind("refined-set", year="2016")
