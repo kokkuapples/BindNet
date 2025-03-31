@@ -272,7 +272,10 @@ class FeatureExtractor:
         for bond in self.molecule.GetBonds():
             if self.node_num is not None and (bond.GetBeginAtomIdx() >= self.node_num or bond.GetEndAtomIdx() >= self.node_num):
                 continue
+
+            # Undirected edges
             edges.append((bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()))
+            edges.append((bond.GetEndAtomIdx(), bond.GetBeginAtomIdx()))
             if sign_features:
                 bond_features.append(bond.GetBondTypeAsDouble())
             else:
@@ -288,7 +291,7 @@ class FeatureExtractor:
                 stereo_value = stereo_map.get(stereo, -1)
                 stereo_atoms = bond.GetStereoAtoms()
                 stereo_atoms_list = list(stereo_atoms) if stereo_atoms else [-1, -1]
-                bond_features.append([
+                feats = [
                     bond.GetBondTypeAsDouble()*2, # make all integer
                     bond.GetIsAromatic(),
                     bond.IsInRing(),
@@ -296,13 +299,13 @@ class FeatureExtractor:
                     stereo_atoms_list[0],  
                     stereo_atoms_list[1],  
                     bond.GetIsConjugated()
-                ])    
+                ]
+                bond_features.append(feats)
+                bond_features.append(feats)
         bond_features = np.array(bond_features, dtype=float)
         edge_index = np.array(edges).T
         edge_dist = np.linalg.norm(self.coords[edge_index[0]] - self.coords[edge_index[1]], axis=1).reshape(-1, 1)
         bond_features = np.hstack([bond_features, edge_dist])
-        
-        print(edge_index)
 
         self.get_a2a_distance_repr(edges)
 
@@ -538,8 +541,10 @@ def edge_ligand_pocket(dist_matrix, lig_size, theta=4, keep_pock=False, reset_id
     dist_list = dist_matrix[pos]
     if reset_idx:
         edge_list = [(x,node_map[y]) for x,y in zip(ligand_list, pocket_list)]
+        edge_list += [(node_map[y], x) for x,y in zip(ligand_list, pocket_list)]
     else:
         edge_list = [(x,y) for x,y in zip(ligand_list, pocket_list)]
+        edge_list += [(y, x) for x,y in zip(ligand_list, pocket_list)]
     
     edge_list += [(y,x) for x,y in edge_list]
     dist_list = np.concatenate([dist_list, dist_list])
@@ -591,4 +596,4 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=True, th
     coords = np.vstack([ligand_coords, pocket_coords])
     assert node_features.shape[0]==coords.shape[0]
     
-    return node_features, ligand_features.shape[0], pocket_edges, ligand_edges, lig_pock_edge, edge_features, coords
+    return node_features, pocket_features.shape[0], pocket_edges, ligand_edges, lig_pock_edge, edge_features, coords

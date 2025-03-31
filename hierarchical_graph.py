@@ -314,7 +314,6 @@ def __concat_edges(edge_p, edge_l, edge_pl, xs):
 
 def __process_pair(pocket_fe, ligand_fe):
     # Atom pocket-ligand graph processing
-    # TODO: Check for bidirectional edges LP
     atom_xs, offset_atom, atom_edges_index_p, atom_edges_index_l, atom_pl_edges, atom_edge_features, coords = process_key(pocket_fe, ligand_fe)
   
     # Concat coords to atom features
@@ -415,6 +414,7 @@ def process_pdbbind(set_type, year="2016"):
                      y=label)
         
         processed_data.append(data)
+        print(data)
     
     # Check if processed dir exists otherwise create it
     save_path_dir = os.path.join(os.getcwd(), "data", f"PDBbind{year}", f"{set_type}_processed")
