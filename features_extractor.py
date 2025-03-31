@@ -302,6 +302,8 @@ class FeatureExtractor:
         edge_dist = np.linalg.norm(self.coords[edge_index[0]] - self.coords[edge_index[1]], axis=1).reshape(-1, 1)
         bond_features = np.hstack([bond_features, edge_dist])
         
+        print(edge_index)
+
         self.get_a2a_distance_repr(edges)
 
         assert np.isnan(bond_features).sum() == 0
@@ -590,57 +592,3 @@ def process_key(pocket_fe, ligand_fe, identity_features=True, keep_pock=True, th
     assert node_features.shape[0]==coords.shape[0]
     
     return node_features, ligand_features.shape[0], pocket_edges, ligand_edges, lig_pock_edge, edge_features, coords
-    #return {'separator': ligand_features.shape[0], 'coords': coords, 'node_features': node_features, 
-    #        'edge_features': edge_features, 'atoms_raw': atoms_raw, 'type_pair': type_pair}
-
-
-def process_pdbbind(data_dir:Path, dropHs:bool=True, test_k:str=None, year=2016):
-    pk_dict = load_pk_data(data_dir/f'index/INDEX_general_PL_data.2020')
-    if test_k is not None:
-        keys_list = [test_k]
-        train_keys = keys_list
-        val_keys = []
-        test_keys = []
-    else:
-        keys_list = [f.name for f in data_dir.iterdir() if f.is_dir() and len(f.name) == 4]
-        assert set(keys_list) - set(pk_dict) == set(), "Some keys are missing."
-
-        np.random.seed(42)         # train|val|test split: .8|.1|.1
-        np.random.shuffle(keys_list)
-        train_keys = keys_list[:int(.8*len(keys_list))]
-        val_keys = keys_list[int(.8*len(keys_list)):int(.9*len(keys_list))]
-        test_keys = keys_list[int(.9*len(keys_list)):]
-
-    train_g = []
-    val_g = []
-    test_g = []
-    for key_list, g in zip([train_keys, val_keys, test_keys], [train_g, val_g, test_g]):
-        for k in tqdm(key_list):
-            pocket_fe = FeatureExtractor.fromFile(data_dir/k/f"{k}_pocket.pdb", dropHs=dropHs)
-            ligand_fe = FeatureExtractor.fromFile(data_dir/k/f"{k}_ligand.mol2", dropHs=dropHs)
-            if pocket_fe is None or ligand_fe is None:
-                continue
-
-            result = process_key(pocket_fe, ligand_fe)
-            if result:
-                g.append(result)
-
-    train_y = [pk_dict[k] for k in train_keys]
-    val_y = [pk_dict[k] for k in val_keys]
-    test_y = [pk_dict[k] for k in test_keys]
-    return (train_g, train_y), (val_g, val_y), (test_g, test_y)
-
-
-def get_bond_order(atom1, atom2, distance):
-    distance = 100 * distance  # We change the metric
-
-    # margin1, margin2 and margin3 have been tuned to maximize the stability of the QM9 true samples
-    if distance < bonds1[atom1][atom2] + margin1:
-        thr_bond2 = bonds2[atom1][atom2] + margin2
-        if distance < thr_bond2:
-            thr_bond3 = bonds3[atom1][atom2] + margin3
-            if distance < thr_bond3:
-                return 3
-            return 2
-        return 1
-    return 0

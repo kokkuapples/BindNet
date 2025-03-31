@@ -51,6 +51,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         # Get subgroup -> subgroup edges
         coords = [self.__compute_center_of_mass(ids) for ids in self.__g2a_repr.values()]
         subgroup_edges_index = self.__topological_based_matching(self.__g2a_repr)
+        
         # Get subgroup -> atom edges
         subgroup_atom_edges_index = self.__get_subgroup_atom_edges()
 
@@ -65,7 +66,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
 
         # Get tensor of AA chain tokenized
         aa_xs = self.__get_AA_tokens(mapping)
-
+        
         # Get AA -> AA edges
         self.__get_AA2a_repr(mapping)
         coords = [self.__compute_center_of_mass(ids) for ids in self.__AA2a_repr.values()]
@@ -151,10 +152,11 @@ class HierarchicalProteinExtractor(FeatureExtractor):
     def __get_AA2a_repr(self, mapping):
         self.__AA2a_repr = dict()
         aa_ids = {aa_id for (aa_name, aa_id) in mapping.values()}
-        
+        idx = iter(range(len(aa_ids)))
+
         for aa_target in aa_ids:
             selected_atoms = [atom for atom, (aa_name, aa_id) in mapping.items() if aa_id == aa_target]
-            self.__AA2a_repr[aa_target] = selected_atoms
+            self.__AA2a_repr[next(idx)] = selected_atoms
 
     def __parse_pdb_residues(self):
         parser = PDB.PDBParser(QUIET=True)
@@ -254,6 +256,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
 
         return edges_tensor
 
+
 def __get_ligand_pocket_bonds(pocket_coord, ligand_coord, offset, threshold=4):
     dm = cdist(pocket_coord, ligand_coord)
     pocket_idx, ligand_idx = dist_filter(dm, threshold)
@@ -275,7 +278,40 @@ def __concat_features(l_xs, p_xs, l_coord, p_coord):
     concat_l_xs = torch.cat([torch.Tensor(l_coord), l_xs.reshape(-1, 1)], dim=1) 
 
     return torch.cat([concat_p_xs, concat_l_xs])
+
+def __relative_distance(edges, xs):
+    """ Compute relative distance between two nodes connected by an edge """
     
+    xa = xs[edges[0]][:, :3]
+    xb = xs[edges[1]][:, :3]
+    d = torch.Tensor(cdist(xa, xb)).diag()
+
+    return d.reshape(-1, 1)
+
+def __concat_edges(edge_p, edge_l, edge_pl, xs):
+    """ Concat ligand edges, protein edges, and ligand-protein edges. Concat edge features in a single tensor """
+
+    edge_index = torch.cat([edge_p, edge_l, edge_pl], dim=1)
+
+    p_reldist = __relative_distance(edge_p, xs)
+    pl_reldist = __relative_distance(edge_pl, xs)
+    p_type = torch.ones(edge_p.size(1)).reshape(-1, 1)
+    pl_type = torch.ones(edge_pl.size(1)).reshape(-1, 1) * -1
+
+    # Handle AA_ligand that has no edges
+    if edge_l.numel() != 0:
+        l_reldist = __relative_distance(edge_l, xs)
+        l_type = torch.ones(edge_l.size(1)).reshape(-1, 1)
+    else:
+        l_reldist = torch.Tensor([])
+        l_type = torch.Tensor([])
+
+    edge_features = torch.cat([torch.cat([p_reldist, p_type], dim=1),
+                               torch.cat([l_reldist, l_type], dim=1),
+                               torch.cat([pl_reldist, pl_type], dim=1)])
+
+    return edge_index, edge_features
+
 def __process_pair(pocket_fe, ligand_fe):
     # Atom pocket-ligand graph processing
     # TODO: Check for bidirectional edges LP
@@ -297,7 +333,7 @@ def __process_pair(pocket_fe, ligand_fe):
     atom_edge_features = torch.vstack([torch.hstack([torch.from_numpy(atom_edge_features), torch.ones(num_edge_features).reshape(-1, 1)]),
                                        torch.hstack([zero_padding, torch.ones(atom_pl_edges.shape[1]).reshape(-1, 1) * -1])])
 
-    ### Subgroup pocket-ligand graph processing
+    ### Subgroup pocket-ligand graph processing ###
     subgroup_xs_p, subgroup_edges_index_p, subgroup_atom_edges_index_p, subgroup_coord_p = pocket_fe.build_subgroup_graph()
     subgroup_xs_l, subgroup_edges_index_l, subgroup_atom_edges_index_l, subgroup_coord_l = ligand_fe.build_subgroup_graph()
     
@@ -312,12 +348,9 @@ def __process_pair(pocket_fe, ligand_fe):
     subgroup_atom_edges_index = torch.cat([subgroup_atom_edges_index_p, subgroup_atom_edges_index_l], dim=1)
     
     subgroup_pl_edges = __get_ligand_pocket_bonds(subgroup_coord_p, subgroup_coord_l, offset_subgroup)
-    subgroup_edges_index = torch.cat([subgroup_edges_index_p, subgroup_edges_index_l, subgroup_pl_edges], dim=1)
-    subgroup_edge_features = torch.cat([torch.ones(subgroup_edges_index_p.shape[1]),
-                                        torch.ones(subgroup_edges_index_l.shape[1]),
-                                        torch.ones(subgroup_pl_edges.shape)[1] * -1])
+    subgroup_edges_index, subgroup_edge_features = __concat_edges(subgroup_edges_index_p, subgroup_edges_index_l, subgroup_pl_edges, subgroup_xs) 
     
-    ### Aminoacid pocket-ligand graph processing
+    ### Aminoacid pocket-ligand graph processing ###
     aa_xs_p, aa_edges_index_p, aa_subgroup_edges_index_p, aa_coord_p = pocket_fe.build_aminoacid_graph()
 
     # In AA level the ligand is a single node
@@ -327,7 +360,7 @@ def __process_pair(pocket_fe, ligand_fe):
     aa_subgroup_edges_index_l = __convert_to_tensor([(0, node) for node in range(len(subgroup_xs_l))])
     aa_coord_l = np.expand_dims(torch.mean(subgroup_coord_l, axis=0), axis=0)
 
-    offset_aa = aa_edges_index_p.shape[0]
+    offset_aa = aa_xs_p.shape[0]
     aa_edges_index_l += offset_aa
 
     aa_subgroup_edges_index_l[0,] += offset_aa
@@ -337,10 +370,7 @@ def __process_pair(pocket_fe, ligand_fe):
     aa_subgroup_edges_index = torch.cat([aa_subgroup_edges_index_p, aa_subgroup_edges_index_l], dim=1)
     
     aa_pl_edges = __get_ligand_pocket_bonds(aa_coord_p, aa_coord_l, offset_aa)
-    aa_edges_index = torch.cat([aa_edges_index_p, aa_edges_index_l, aa_pl_edges], dim=1)
-    aa_edge_features = torch.cat([torch.ones(aa_edges_index_p.shape[1]),
-                                  #torch.ones(aa_edges_index_l.shape[1]),
-                                  torch.ones(aa_pl_edges.shape)[1] * -1])
+    aa_edges_index, aa_edge_features = __concat_edges(aa_edges_index_p, aa_edges_index_l, aa_pl_edges, aa_xs)
 
     # Packaging different layers
     atom_graph = (atom_xs, atom_edges_index, None, atom_edge_features)
@@ -385,7 +415,6 @@ def process_pdbbind(set_type, year="2016"):
                      y=label)
         
         processed_data.append(data)
-        print(data)
     
     # Check if processed dir exists otherwise create it
     save_path_dir = os.path.join(os.getcwd(), "data", f"PDBbind{year}", f"{set_type}_processed")
