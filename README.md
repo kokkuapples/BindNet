@@ -6,5 +6,5 @@
 - [x] Edge matching in upper graphs using atom level edges;
 - [x] Add position in features;
 - [ ] Add ligand embeddings;
-- [ ] Add distance features to edge features;
-- [ ] Create HEGNN layer.
+- [x] Add distance features to edge features;
+- [x] Create HEGNN layer.
