@@ -54,10 +54,12 @@ bond_dict = {1: Chem.rdchem.BondType.SINGLE, 2: Chem.rdchem.BondType.DOUBLE, 3: 
 
 
 class FeatureExtractor:
-    def __init__(self, molecule, pdb_file, dropHs:bool=True, cut_dist=5.0, node_num=None):
+    def __init__(self, molecule, pdb_file, mol_type, dropHs:bool=True, cut_dist=5.0, node_num=None):
         """
         Contains all methods to extract features from a molecule.
         """
+
+        self.mol_type = mol_type
         self.molecule = molecule
         self.pdb_file = pdb_file
         self.dropHs = dropHs
@@ -319,7 +321,7 @@ class FeatureExtractor:
             self.a2a_distance_repr[e1].append(e2)
 
     @classmethod
-    def fromFile(cls, mol_file, dropHs:bool=True, tried_formats=None):
+    def fromFile(cls, mol_file, mol_type, dropHs:bool=True, tried_formats=None):
         """
         Converts a file to an RDKit Mol object.
         """
@@ -377,7 +379,7 @@ class FeatureExtractor:
                 logging.error(f"[{mol_file.parent.name}] Could not parse {suffix.upper()} file.")
                 return None
        
-        return cls(mol, pdb_file, dropHs=dropHs, cut_dist=5.0, node_num=node_num)
+        return cls(mol, pdb_file, mol_type, dropHs=dropHs, cut_dist=5.0, node_num=node_num)
 
     
     def SaveMolecule(self, filename, file_format='pdb'):
