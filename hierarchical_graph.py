@@ -14,8 +14,11 @@ import tqdm
 import re
 
 from features_extractor import FeatureExtractor, process_key, dist_filter
-from decompose import decompose_molecule, has_ring
+from decompose import decompose_molecule, has_ring, edges_to_undefined
 
+# Disable annoying rdkit warnings
+from rdkit import RDLogger
+RDLogger.DisableLog('rdApp.*')
 
 class HierarchicalProteinGraph(Data):
     def __inc__(self, key, value, *args, **kwargs):
@@ -46,14 +49,13 @@ class HierarchicalProteinExtractor(FeatureExtractor):
         keys = self.subgroup_encoding.keys() if self.mol_type == "pocket" else decompose_molecule(self.molecule)
         matches = self.__get_g2a_repr(keys)
         self.__g2a_repr, subgroup_smiles = self.__detect_collision(matches)
-        if self.mol_type == "ligand": print(subgroup_smiles)
         self.__get_a2g_repr()
 
         # Get tensor of tokenized subgroups
         if self.mol_type == "pocket":
-            subgroups_xs = torch.tensor([self.subgroup_encoding[subgroup] for subgroup in subgroup_smiles])
+            subgroups_xs = torch.tensor([self.subgroup_encoding.get(subgroup, 0) for subgroup in subgroup_smiles])
         else:
-            subgroups_xs = torch.tensor([self.ligand_subgroup_encoding[subgroup] for subgroup in subgroup_smiles])
+            subgroups_xs = torch.tensor([self.ligand_subgroup_encoding.get(subgroup, 0) for subgroup in subgroup_smiles])
         
         # Get subgroup -> subgroup edges
         coords = [self.__compute_center_of_mass(ids) for ids in self.__g2a_repr.values()]
@@ -70,7 +72,7 @@ class HierarchicalProteinExtractor(FeatureExtractor):
             self.build_subgroup_graph()
 
         mapping = self.__pdb2rdkit_mapping()
-
+        
         # Get tensor of AA chain tokenized
         aa_xs = self.__get_AA_tokens(mapping)
         
@@ -135,24 +137,19 @@ class HierarchicalProteinExtractor(FeatureExtractor):
                 subgroups_list.append(subgroup_smiles)
 
         return filtered_matches, subgroups_list
-
+    
     def __get_g2a_repr(self, keys):
         matches = []
 
         Chem.Kekulize(self.molecule, clearAromaticFlags=True)
         for subgroup_smiles in keys: # Already in SMILES
             subgroup = Chem.MolFromSmiles(subgroup_smiles)
-            Chem.Kekulize(subgroup, clearAromaticFlags=True)
-            subgroup_smiles = Chem.MolToSmiles(subgroup)
-            
-            if has_ring(subgroup):
-                frag_for_match = Chem.MolFromSmiles(re.sub(r"=", r"~", subgroup_smiles))
-            else:
-                frag_for_match = subgroup
-            
+            frag_for_match = edges_to_undefined(subgroup)
             matched_atoms = self.molecule.GetSubstructMatches(frag_for_match)
+            
             if matched_atoms:
                 # (atom_ids (tuple), subgroup_smiles)
+                #matches += list(zip(matched_atoms, cycle([Chem.MolToSmiles(frag_for_match)])))
                 matches += list(zip(matched_atoms, cycle([subgroup_smiles])))
         
         return matches
@@ -165,11 +162,12 @@ class HierarchicalProteinExtractor(FeatureExtractor):
 
     def __get_AA2a_repr(self, mapping):
         self.__AA2a_repr = dict()
-        aa_ids = {aa_id for (aa_name, aa_id) in mapping.values()}
-        idx = iter(range(len(aa_ids)))
-
-        for aa_target in aa_ids:
-            selected_atoms = [atom for atom, (aa_name, aa_id) in mapping.items() if aa_id == aa_target]
+        unique = set(mapping.values())
+        idx = iter(range(len(unique)))
+        
+        #for aa_target in aa_ids:
+        for aa_target in unique:
+            selected_atoms = [atom for atom, aa_mapped in mapping.items() if aa_target == aa_mapped]
             self.__AA2a_repr[next(idx)] = selected_atoms
 
     def __parse_pdb_residues(self):
@@ -365,7 +363,7 @@ def __process_pair(pocket_fe, ligand_fe):
     
     ### Aminoacid pocket-ligand graph processing ###
     aa_xs_p, aa_edges_index_p, aa_subgroup_edges_index_p, aa_coord_p = pocket_fe.build_aminoacid_graph()
-
+    
     # In AA level the ligand is a single node
     # TODO: Weighted sum over AA ligand node
     aa_xs_l = torch.tensor([ligand_fe.aa_encoding["LIGAND"]])
@@ -407,30 +405,33 @@ def process_pdbbind(set_type, year="2016"):
 
     pdb_names = [line[0] for line in index_lines] 
     labels = torch.Tensor([float(line[3]) for line in index_lines])
-    pdb_names = pdb_names[:10] 
+    
     print(f"Processing {len(pdb_names)} proteins...")
     processed_data = []
     for label, pdb_filename in tqdm.tqdm(zip(labels, pdb_names)):
-        pocket_file_path = Path(os.path.join(base_data_dir, f"{pdb_filename}/{pdb_filename}_pocket.pdb")) 
-        ligand_file_path = Path(os.path.join(base_data_dir, f"{pdb_filename}/{pdb_filename}_ligand.mol2")) 
-        
-        pocket_fe = HierarchicalProteinExtractor.fromFile(pocket_file_path, "pocket") 
-        ligand_fe = HierarchicalProteinExtractor.fromFile(ligand_file_path, "ligand") 
-        print("----->", ligand_file_path)
+        try:
+            pocket_file_path = Path(os.path.join(base_data_dir, f"{pdb_filename}/{pdb_filename}_pocket.pdb")) 
+            ligand_file_path = Path(os.path.join(base_data_dir, f"{pdb_filename}/{pdb_filename}_ligand.mol2")) 
+            
+            pocket_fe = HierarchicalProteinExtractor.fromFile(pocket_file_path, "pocket") 
+            ligand_fe = HierarchicalProteinExtractor.fromFile(ligand_file_path, "ligand") 
 
-        atom_graph, subgroup_graph, aa_graph = __process_pair(pocket_fe, ligand_fe)
-        atom_xs, atom_edges_index, _, atom_edge_features = atom_graph
-        subgroup_xs, subgroup_edges_index, subgroup_atom_edges_index, subgroup_edge_features = subgroup_graph
-        aa_xs, aa_edges_index, aa_subgroup_edges_index, aa_edge_features = aa_graph
+            atom_graph, subgroup_graph, aa_graph = __process_pair(pocket_fe, ligand_fe)
+            atom_xs, atom_edges_index, _, atom_edge_features = atom_graph
+            subgroup_xs, subgroup_edges_index, subgroup_atom_edges_index, subgroup_edge_features = subgroup_graph
+            aa_xs, aa_edges_index, aa_subgroup_edges_index, aa_edge_features = aa_graph
+            
+            data = HierarchicalProteinGraph(atom_nodes=atom_xs, atom_edge_index=atom_edges_index, atom_edge_xs=atom_edge_features,
+                         subgroup_nodes=subgroup_xs, subgroup_edge_index=subgroup_edges_index, g2a_index=subgroup_atom_edges_index, subgroup_edge_features=subgroup_edge_features,
+                         aa_nodes=aa_xs, aa_edge_index=aa_edges_index, aa2g_index=aa_subgroup_edges_index, aa_edge_features=aa_edge_features, 
+                         y=label)
+            
+            processed_data.append(data)
         
-        data = HierarchicalProteinGraph(atom_nodes=atom_xs, atom_edge_index=atom_edges_index, atom_edge_xs=atom_edge_features,
-                     subgroup_nodes=subgroup_xs, subgroup_edge_index=subgroup_edges_index, g2a_index=subgroup_atom_edges_index, subgroup_edge_features=subgroup_edge_features,
-                     aa_nodes=aa_xs, aa_edge_index=aa_edges_index, aa2g_index=aa_subgroup_edges_index, aa_edge_features=aa_edge_features, 
-                     y=label)
-        
-        processed_data.append(data)
-        print(data)
-    
+        except Exception as e:
+            print("[!] ", e)
+            print(f"Got exception with file: {pdb_filename}")
+
     # Check if processed dir exists otherwise create it
     save_path_dir = os.path.join(os.getcwd(), "data", f"PDBbind{year}", f"{set_type}_processed")
     Path(save_path_dir).mkdir(exist_ok=True)
@@ -441,5 +442,4 @@ def process_pdbbind(set_type, year="2016"):
     
 
 if __name__ == "__main__":
-    # TODO: Fix filtered_id order
     process_pdbbind("refined-set", year="2016")
