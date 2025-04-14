@@ -1,0 +1,19 @@
+name: bindnet
+channels:
+    - pyg
+    - conda-forge
+    - defaults
+dependencies:
+    - python=3.11.10
+    - pytorch=2.2.0
+    - pyg=2.5.2
+    - pytorch-lightning=2.5.1
+    - scikit-learn
+    - numpy
+    - scipy
+    - rdkit
+    - biopython
+    - tqdm
+    - wandb
+    - pip:
+        - egnn-pytorch==0.2.8

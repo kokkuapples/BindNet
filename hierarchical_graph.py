@@ -1,5 +1,6 @@
 import os 
 import csv
+import argparse
 import numpy as np
 from itertools import cycle
 import sys
@@ -442,4 +443,10 @@ def process_pdbbind(set_type, year="2016"):
     
 
 if __name__ == "__main__":
-    process_pdbbind("refined-set", year="2016")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--year", choices=["2016", "2020"], required=True, help="Version (year) of PDBbind dataset. Valid choices: 2016, 2020.")
+    parser.add_argument("--set", choices=["refined-set", "general-set"], required=True, help="Set of PDBbind to process.")
+    args = parser.parse_args()
+   
+    print(f"Processing PDBbind{args.year}/{args.set}")
+    process_pdbbind(args.set, year=args.year)
